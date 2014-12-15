@@ -43,6 +43,7 @@ cg_JSNode (a,gamma) (NN n)
   | is_BoolResOp_JS (NN n) = cg_BoolResOp (a,gamma) (ex_BinOp_JS (NN n))
   | is_IntOp_JS (NN n) = cg_IntOp (a,gamma) (ex_BinOp_JS (NN n))
   | is_BoolOp_JS (NN n) = cg_BoolOp (a,gamma) (ex_BinOp_JS (NN n))
+  | is_StringD_JS (NN n) = cg_StringD (a,gamma) (ex_StringD_JS (NN n))
 --                           | otherwise = cg_Node (a,gamma) n
 cg_JSNode (a,gamma) (NT n _l _c) | trace 30 "JSNode NT" True = cg_JSNode (a,gamma) (NN n)
 cg_JSNode (a,gamma) j | trace 1 ("Not handled " ++ show j) True = (a,JST0_None,gamma,[])
@@ -208,6 +209,7 @@ cg_TmemX (a,gamma) (e,m,ei) = let
   in (a3,tp,gamma2,concat[c,c_te,c_e,c_f,c_ei,c_arg])
 
 cg_TfunX :: Con_in -> (String,[JSNode]) -> Con_out
+cg_TfunX (a,gamma) (f,ei) |trace 30 ("TfunX: " ++ show f ++ "(" ++ show ei ++ "), \n" ++ show gamma) False = undefined
 cg_TfunX (a,gamma) (f,ei) |trace 10 ("TfunX") False = undefined
 cg_TfunX (a,gamma) (f,ei) = let
   -- acquire new Variables
@@ -217,7 +219,10 @@ cg_TfunX (a,gamma) (f,ei) = let
   (a2,tx) = cg_ArgList_copy a0 ei
 
   -- infer function type
-  (g,Definite) = var_get gamma f
+  (g_cand,psi) = var_get gamma f
+  g | psi == Definite = g_cand
+    | trace 1 ("Read from potential Function " ++ f) True = undefined
+    | otherwise = undefined
   gamma1 = var_set gamma f (g,Definite)
   -- infer argument types
   (a4,ti,gamma2,c_ei) = cg_JSNode_list (a2,gamma1) ei
@@ -281,7 +286,7 @@ cg_TfunD (a,gamma) (f,xi,e) = let
     in (a3,tf,gammap,concat[c_1,c,c_this])
 
 cg_TobjD :: Con_in -> [(String,[JSNode])] -> Con_out
-cg_TobjD (a,gamma1) fields | trace 10 ("TObjD") False = undefined
+cg_TobjD (_a,_gamma1) _fields | trace 10 ("TObjD") False = undefined
 cg_TobjD (a,gamma1) fields = let
   -- create TVs
   o = JST0_TV a "objLit"
@@ -289,7 +294,7 @@ cg_TobjD (a,gamma1) fields = let
   -- infer type
   (ap,types,gammakp1,c1) = cg_fields (a0,gamma1) fields
   to = object_from_list NotRec types
-  c |trace 2 ("-----" ++ show to) True = [SubType o to,
+  c = [SubType o to,
        Only_type o to]
   in (ap,o,gammakp1,concat [c,c1])
 
@@ -327,6 +332,10 @@ cg_BoolOp (a,gamma) (js1,js2) = let
         SubType t2 JST0_Bool]
   in (a2,JST0_Bool,gamma2,concat[c_1,c_2,c])
 
+cg_StringD :: Con_in -> String -> Con_out
+cg_StringD (_a,_gamma) s | trace 10 ("StringD: " ++ s) False = undefined
+cg_StringD (a,gamma) _s =
+  (a,JST0_String "",gamma,[])
 
 ----------------------------------------
 -- Auxiliary Functions
@@ -383,6 +392,7 @@ fp_JSNode (a,gamma) (NN n)
   | is_TWhile_JS (NN n) = fp_TWhile (a,gamma) (ex_TWhile (NN n))
   | is_BoolResOp_JS (NN n) = fp_BinOp (a,gamma) (ex_BinOp_JS (NN n))
   | is_IntOp_JS (NN n) = fp_BinOp (a,gamma) (ex_BinOp_JS (NN n))
+  | is_StringD_JS (NN n) = fp_StringD (a,gamma) (ex_StringD_JS (NN n))
 fp_JSNode (a,gamma) (NT n _l _c) = fp_JSNode (a,gamma) (NN n)
 fp_JSNode (a,gamma) j | trace 1 ("FP: Expression not handled" ++ show j) True = (a,gamma)
                       | True = undefined
@@ -440,7 +450,7 @@ fp_TfunD :: FP_in -> (String,[String],JSNode) -> FP_out
 fp_TfunD (a,gamma) (f,_x,_e) | f=="" = (a,gamma)
                              | otherwise = let
   tf = JST0_TV a (f++"Decl")
-  gammap = var_set gamma f (tf,Potential)
+  gammap = var_set gamma f (tf,Definite)
   in (a+1,gammap)
 
 fp_TobjD :: FP_in -> [(String,[JSNode])] -> FP_out
@@ -453,3 +463,6 @@ fp_TWhile (a,gamma) (bool,e) = fp_JSNode (fp_JSNode (a,gamma) bool) e
 
 fp_BinOp :: FP_in -> ([JSNode],[JSNode]) -> FP_out
 fp_BinOp (a,gamma) (js1,js2) = fp_JSNodes (fp_JSNodes (a,gamma) js1) js2
+
+fp_StringD :: FP_in -> String -> FP_out
+fp_StringD (a,gamma) _s = (a,gamma)

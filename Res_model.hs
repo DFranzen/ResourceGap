@@ -14,7 +14,7 @@ c_memR = I 0
 
 c_memW :: FieldType -> Annotation
 c_memW a = case a of
-  Potential -> I 17
+  Potential -> I 0
   Definite -> I 0
 
 c_new :: Annotation
@@ -30,18 +30,15 @@ c_varD :: Annotation
 c_varD = I c_varDi
 
 c_varDi :: Int
-c_varDi = 1
+c_varDi = 0
 
 c_funD :: Annotation
 c_funD = I c_funDi
 
 c_funDi :: Int
-c_funDi = 1
+c_funDi = 0
 
 c_objD :: Annotation
 c_objD = I 0
 --c_int :: Annotation
 --c_int = I 1
-
-c_mult :: Annotation -> Int -> Annotation
-c_mult (I k) l = I (l*k)

@@ -76,12 +76,19 @@ cset_is_empty s = Map.null s
 cset_empty :: CSet
 cset_empty = Map.empty
 
-cset_insert :: Constrain -> CSet -> CSet
-cset_insert c cm = Map.insert (show c) c cm
+cset_insert :: CSet -> Constrain -> CSet
+cset_insert cs c = Map.insert (show c) c cs
+
+cset_check_and_insert :: CSet -> Constrain -> (Bool,CSet)
+cset_check_and_insert cs c = let
+  prev = cset_contains cs c
+  nset | prev = cs
+       | otherwise = cset_insert cs c
+  in (prev,nset)
 
 -- insert multiple Constraints into an existing Constraints Map
 cset_insert_multi :: CSet -> [Constrain] -> CSet
-cset_insert_multi cm cs = Prelude.foldr (cset_insert) cm cs
+cset_insert_multi cs c = Prelude.foldr (\c cs -> cset_insert cs c) cs c
 
 -- Convert a Map of Constraints into an easier to handle list.
 cset_to_list :: CSet -> [Constrain]
@@ -97,17 +104,27 @@ cset_contains m c = case Map.lookup (show c) m of
   (Just _) -> True
   Nothing -> False
 
+-- union with check, how many of the elements from the 1st argument were inserted into the 2nd argument
+cset_union_int :: CSet -> CSet -> (CSet, Int)
+cset_union_int cm cmp = let
+  cmp_c = Map.size cmp
+  un = Map.union cm cmp
+  un_c = Map.size un
+  in (un,un_c-cmp_c)
+
+
 -- insert with check, if it is already in there
 -- Return:
 --  - True if new constraints were inserted
 --  - False if they already existed
+
 cset_union_bool :: CSet -> CSet -> (CSet, Bool)
 cset_union_bool cm cmp = let cs= cset_to_list cm
-                    in Prelude.foldr (cset_insert_bool) (cmp,False) cs
+                          in Prelude.foldr (cset_insert_bool) (cmp,False) cs
 
 cset_insert_bool :: Constrain -> (CSet,Bool) -> (CSet,Bool)
 cset_insert_bool c (cm,b) = let bn = b || not(cset_contains cm c)
-                                cmn = cset_insert c cm
+                                cmn = cset_insert cm c
                             in (cmn,bn)
 
 ----------------------------------------
@@ -115,7 +132,7 @@ cset_insert_bool c (cm,b) = let bn = b || not(cset_contains cm c)
 --   save all the constraints affecting each type variable
 ----------------------------------------
 
-type CMap = Map Int ([Constrain])
+type CMap = Map Int (CSet)
 
 cmap_empty :: CMap
 cmap_empty = Map.empty
@@ -123,31 +140,71 @@ cmap_empty = Map.empty
 -- Add a constrain to the sorted constrain set
 --  -> add to the list if index is already there
 --  -> add new key with a singleton list, if not there yet
-cmap_add :: CMap -> Type -> Constrain -> CMap
-cmap_add m (JST0_TV a1 _ann1) c = let
-  cur = Map.lookup a1 m
-  new = case cur of
-    Nothing -> [c]
-    (Just cs) -> c:cs
+cmap_addWithType :: CMap -> Type -> Constrain -> CMap
+cmap_addWithType m (JST0_TV a1 _ann1) c = let
+  cur = cmap_geti m a1
+  new = cset_insert cur c
   in Map.insert a1 new m
-cmap_add m _ _ = m
+cmap_addWithType m _ _ = m
+
+cmap_addi :: CMap -> Int -> Constrain -> CMap
+cmap_addi cm i c = let
+  cur = cmap_geti cm i
+  new = cset_insert cur c
+  in Map.insert i new cm
+
+cmap_addWithIndexSet :: CMap -> Set Int -> Constrain -> CMap
+cmap_addWithIndexSet cm is c = Set.fold (\i prv -> cmap_addi prv i c) cm is
+
+cmap_add :: CMap -> Constrain -> CMap
+cmap_add cmap c = let
+  is = cmap_where_all c
+  in cmap_addWithIndexSet cmap is c
+  
+  
+--  case c of 
+--  (Empty t) -> cmap_addWithType cmap t c
+--  (SubType t1 t2) -> cmap_addWithType (cmap_addWithType cmap t1 c) t2 c
+--  (IsObject t) -> cmap_addWithType cmap t c
+--  (MemberExtend t _ t2) -> cmap_addWithType (cmap_addWithType cmap t2 c) t c
+--  (Extend t1 t2) -> cmap_addWithType (cmap_addWithType cmap t1 c) t2 c
+--  (Only t1 _) -> cmap_addWithType cmap t1 c
+--  (Only_type t1 t2) -> cmap_addWithType (cmap_addWithType cmap t1 c) t2 c
+
+cmap_check_and_insert :: CMap -> Constrain -> (CMap,Bool)
+cmap_check_and_insert cm c = let
+  b = cmap_contains cm c
+  cm_new | b = cm
+         | otherwise = cmap_add cm c
+  in (cm_new,b)
 
 cmap_from_list :: [Constrain] -> CMap
 cmap_from_list [] = Map.empty
 cmap_from_list (c:s) = let r = cmap_from_list s
-                       in case c of
-                         (Empty t) -> cmap_add r t c
-                         (SubType t1 t2) -> cmap_add (cmap_add r t1 c) t2 c
-                         (IsObject t) -> cmap_add r t c
-                         (MemberExtend t _ t2) -> cmap_add (cmap_add r t2 c) t c
-                         (Extend t1 t2) -> cmap_add (cmap_add r t1 c) t2 c
-                         (Only t1 _) -> cmap_add r t1 c
-                         (Only_type t1 t2) -> cmap_add (cmap_add r t1 c) t2 c
+                       in cmap_add r c
 
-cmap_geti :: CMap -> Int -> [Constrain]
+cmap_geti :: CMap -> Int -> CSet
 cmap_geti cmap tv = case Map.lookup tv cmap of
-  Nothing -> []
+  Nothing -> cset_empty
   Just t -> t
+
+cmap_contains :: CMap -> Constrain -> Bool
+cmap_contains cm c = let
+  -- get one of the indices c could be saved in
+  i = cmap_where_one c
+  cur = cmap_geti cm i
+  in cset_contains cur c
+
+cmap_where_one :: Constrain -> Int
+cmap_where_one c | tv_rel c = JST0_constrain.tv_rel_get c
+                 | otherwise = -1
+
+cmap_where_all :: Constrain -> Set Int
+cmap_where_all c | tv_rel c = JST0_constrain.tv_rel_get_all c
+                 | otherwise = Set.insert (-1) Set.empty
+
+cmap_size :: CMap -> Int
+cmap_size cm = Map.size cm
 
 ----------------------------------------
 -- TypeVariable map
@@ -156,7 +213,7 @@ cmap_geti cmap tv = case Map.lookup tv cmap of
 
 type TVMap = Map Int (Set Int)
 
-tvmap_empty :: CMap
+tvmap_empty :: TVMap
 tvmap_empty = Map.empty
 
 tvmap_add :: TVMap -> Type -> Type -> TVMap
@@ -171,17 +228,27 @@ tvmap_add m _ _ = m
 tvmap_add_pair :: TVMap -> Type -> Type -> TVMap
 tvmap_add_pair m t1 t2 = tvmap_add (tvmap_add m t1 t2) t2 t1
 
+tvmap_add_constrain :: TVMap -> Constrain -> TVMap
+tvmap_add_constrain tm c = case c of
+                           (Empty _t) -> tm
+                           (SubType t1 t2) -> tvmap_add_pair tm t1 t2
+                           (MemberExtend t1 _ t2) -> tvmap_add_pair tm t1 t2
+                           (Extend t1 t2) -> tvmap_add_pair tm t1 t2
+                           (IsObject _t) -> tm
+                           (Only _t _s) -> tm
+                           (Only_type t1 t2) -> tvmap_add_pair tm t1 t2
+
+
 tvmap_from_list :: [Constrain] -> TVMap
 tvmap_from_list [] = Map.empty
 tvmap_from_list (c:cs) = let r = tvmap_from_list cs
-                         in case c of
-                           (Empty _t) -> r
-                           (SubType t1 t2) -> tvmap_add_pair r t1 t2
-                           (MemberExtend t1 _ t2) -> tvmap_add_pair r t1 t2
-                           (Extend t1 t2) -> tvmap_add_pair r t1 t2
-                           (IsObject _t) -> r
-                           (Only _t _s) -> r
-                           (Only_type t1 t2) -> tvmap_add_pair r t1 t2
+                         in tvmap_add_constrain r c
+
+tvmap_from_CMap :: CMap -> TVMap
+tvmap_from_CMap cm = Map.fold (\cs prv -> tvmap_add_from_CSet prv cs) tvmap_empty cm
+
+tvmap_add_from_CSet :: TVMap -> CSet -> TVMap
+tvmap_add_from_CSet tm cs = Map.fold (\c prv -> tvmap_add_constrain prv c) tm cs
 
 tvmap_geti :: TVMap -> Int -> Set Int
 tvmap_geti tvmap tv = case Map.lookup tv tvmap of

@@ -45,9 +45,10 @@ ag_JSNode gamma (NN n)
   | is_TfunD_JS (NN n) = ag_TfunD gamma (ex_TfunD (NN n))
   | is_TobjD_JS (NN n) = ag_TobjD gamma (ex_TobjD (NN n))
   | is_TWhile_JS (NN n) = ag_TWhile gamma (ex_TWhile (NN n))
-  | is_BoolResOp_JS (NN n) = ag_BinOp gamma (ex_BinOp_JS (NN n))
-  | is_IntOp_JS (NN n) = ag_BinOp gamma (ex_BinOp_JS (NN n))
-  | is_BoolOp_JS (NN n) = ag_BinOp gamma (ex_BinOp_JS (NN n))
+  | is_BoolResOp_JS (NN n) = ag_BinOp gamma (ex_BinOp_JS (NN n)) JST0P_Bool
+  | is_IntOp_JS (NN n) = ag_BinOp gamma (ex_BinOp_JS (NN n)) JST0P_Int
+  | is_BoolOp_JS (NN n) = ag_BinOp gamma (ex_BinOp_JS (NN n)) JST0P_Bool
+  | is_StringD_JS (NN n) = ag_StringD gamma (ex_StringD_JS (NN n))
 ag_JSNode gamma (NT n _l _c) = ag_JSNode gamma (NN n)
 ag_JSNode (a,b,g,n,_sol) j | trace 1 ("AG: Not handled " ++ show j) True = (a,b,JST0P_None,n,g,[])
 
@@ -219,11 +220,12 @@ ag_TfunX (a,b,gamma,n,sol) (f,ei) = let
   (JST0P_Function o tx nf tp nfp) = g
 
   c = [ Gt [n,ng] [n1,ngp],
+        Gt [n2] [nf,c_funX],
         Gt [np,c_funX,nf] [n2,nfp],
         Gt [n2,nfp] [np,c_funX,nf]]
   c_o = makeEmpty_P o
   c_ti = makeMore_list ti tx
-  in (a4,b4,tp,n2,g2,concat[c_ti,c_o,c_ei,c])
+  in (a4,b4,tp,np,g2,concat[c_ti,c_o,c_ei,c])
 
 ag_TSeq :: Con_in -> [JSNode] -> [JSNode] -> Con_out
 ag_TSeq (a,b,g,n,sol) e1 e2 | is_irrellevant_list e1 = ag_JSNodes (a,b,g,n,sol) e2
@@ -313,11 +315,15 @@ ag_TWhile (a,b,g,n,sol) (bool,e) = let
   c = [Gt [n2] [n1], Gt [n1] [np], Gt [n2] [np]]
   in (a2,b2,JST0P_None,np,g1,concat [c,c_1,c_2,c_g])
 
-ag_BinOp :: Con_in -> ([JSNode],[JSNode]) -> Con_out
-ag_BinOp (a,b,g,n,sol) (e1,e2) = let
+ag_BinOp :: Con_in -> ([JSNode],[JSNode]) -> TypeP -> Con_out
+ag_BinOp (a,b,g,n,sol) (e1,e2) t = let
   (a1,b1,_t1,n1,g1,c_1) = ag_JSNodes (a,b,g,n,sol) e1
   (a2,b2,_t2,n2,g2,c_2) = ag_JSNodes (a1,b1,g1,n1,sol) e2
-  in (a2,b2,JST0P_Bool,n2,g2,concat [c_1,c_2])
+  in (a2,b2,t,n2,g2,concat [c_1,c_2])
+
+ag_StringD :: Con_in -> String -> Con_out
+ag_StringD (a,b,g,n,sol) s =
+  (a,b,JST0P_String "",n,g,[])
 
 ----------------------------------------
 -- Auxiliary Functions
@@ -381,6 +387,7 @@ fpp_JSNode g (NN n)
   | is_BoolResOp_JS (NN n) = fpp_BinOp g (ex_BinOp_JS (NN n))
   | is_IntOp_JS (NN n) = fpp_BinOp g (ex_BinOp_JS (NN n))
   | is_BoolOp_JS (NN n) = fpp_BinOp g (ex_BinOp_JS (NN n))
+  | is_StringD_JS (NN n) = fpp_StringD g (ex_StringD_JS (NN n))
 fpp_JSNode g (NT n _l _c) = fpp_JSNode g (NN n)
 fpp_JSNode (a,b,_sol,gamma) j | trace 1 ("FPP: Expression not handled" ++ show j) True = (a,b,gamma,0)
                               | True = undefined
@@ -449,7 +456,7 @@ fpp_TfunD :: FPP_in -> (String,[String],JSNode) -> FPP_out
 fpp_TfunD (a,b,sol,gamma) (f,_x,_e) | f == "" = (a,b,gamma,1)
                                     |otherwise = let
   tf = solutionP_get sol a --JST0_TV a (f++"Decl")
-  gammap = var_set gamma f ((tf,I 0),Potential)
+  gammap = var_set gamma f ((tf,I 0),Definite)
   in (a+1,b+1,gammap,c_funDi)
 
 fpp_TobjD :: FPP_in -> [(String,[JSNode])] -> FPP_out
@@ -463,3 +470,5 @@ fpp_TWhile (a,b,sol,gamma) (bool, e) = fpp_TSeq (a,b,sol,gamma) [bool] [e]
 fpp_BinOp :: FPP_in -> ([JSNode],[JSNode]) -> FPP_out
 fpp_BinOp (a,b,sol,gamma) (e1,e2) = fpp_TSeq (a,b,sol,gamma) e1 e2
 
+fpp_StringD :: FPP_in -> String -> FPP_out
+fpp_StringD (a,b,_sol,gamma) _s = (a,b,gamma,0)

@@ -4,26 +4,33 @@ import JST0_types
 --import JST0_type_aux
 
 import Data.Map as Map
+import Data.Set as Set
 --import Data.List as List
 
 import Debugging
 
 data Constrain = SubType Type Type
+               | Cast Type Type
                | MemberExtend Type String Type
                | Extend Type Type
                | IsObject Type
                | Only Type [String] -- Type has not more than the following definite members
                | Only_type Type Type -- Type has not more definite members than the other                 
                | Empty Type
+               deriving Eq
                  
 instance Show Constrain where
   show (SubType t1 t2) = (show t1) ++ "≤" ++ (show t2)
+  show (Cast t1 t2) = (show t1) ++ "≤_c" ++ (show t2) 
   show (IsObject t) = "(" ++ (show t) ++ ")^{obj}"
   show (MemberExtend t1 m t2) = (show t1) ++ "⊲_" ++ (show m) ++ (show t2)
   show (Extend t1 t2) = (show t1) ++ "⊲_*" ++ (show t2)
   show (Empty t1) = (show t1) ++ "°"
   show (Only t1 s) = (show t1) ++ "≤_⚫" ++ (show s)
   show (Only_type t1 t2) = (show t1) ++ "≤_⚫" ++ (show t2)
+
+instance Ord Constrain where
+  compare a b = compare (show a) (show b)
 
 ----------------------------------------
 -- check a set of constraints with no TVs
@@ -79,40 +86,69 @@ should_be_empty ((Empty _):_) = True
 should_be_empty (_:cs) = should_be_empty cs
 
 cs_show_varinfo :: [Constrain] -> String
-cs_show_varinfo cs = let tvs = get_type_variables cs
-                     in Map.fold (\x prv -> (prv ++ "\n" ++ tv_show_info x)) "" tvs
+cs_show_varinfo cs = let tvs = JST0_constrain.get_TVs_list cs
+                     in Map.foldWithKey (\i s prv -> (prv ++ "\n" ++ show i ++ ":" ++ s)) "" tvs
 
--- return the indices of the used type variables
-get_type_variables :: [Constrain] -> (Map Int Type)
-get_type_variables [] = Map.empty
-get_type_variables (a:xs) = let
-  here= case a of 
-    SubType t1 t2 -> Map.union (get_tv_inside t1) (get_tv_inside t2)
-    --Equal t1 t2 -> Map.union (get_tv_inside t1) (get_tv_inside t2)
-    IsObject t -> get_tv_inside t
-    MemberExtend t1 _ t2 -> Map.union (get_tv_inside t1) (get_tv_inside t2)
-    Extend t1 t2 -> Map.union (get_tv_inside t1) (get_tv_inside t2)
-    Empty t -> get_tv_inside t
-    Only t _ -> get_tv_inside t
-    Only_type t _ -> get_tv_inside t
-  in Map.union here (get_type_variables xs)
+-- return a list of all types in a constraint
+get_types :: Constrain -> [Type]
+get_types (SubType t1 t2) = [t1,t2]
+get_types (Cast t1 t2) = [t1,t2]
+get_types (IsObject t) = [t]
+get_types (Empty t) = [t]
+get_types (MemberExtend t1 _ t2) = [t1,t2]
+get_types (Extend t1 t2) = [t1,t2]
+get_types (Only t _) = [t]
+get_types (Only_type t1 t2) = [t1,t2]
 
--- return all the type variable indices inside a type
-get_tv_inside :: Type -> (Map Int Type)
-get_tv_inside JST0_Int = Map.empty
-get_tv_inside JST0_Bool = Map.empty
-get_tv_inside (JST0_String _) = Map.empty
-get_tv_inside (JST0_Object _ xs) = Map.fold (\(t,_) xs2-> Map.union (get_tv_inside t) xs2) Map.empty xs
-get_tv_inside (JST0_None) = Map.empty
-get_tv_inside (JST0_Function t1 t2 t3) = Map.unions [get_tv_inside t1, get_tv_inside_list t2, get_tv_inside t3]
-get_tv_inside (JST0_Alpha _) = Map.empty
-get_tv_inside t = Map.insert (tv_get_index t) t Map.empty
+-- return a map of the used type variables
+get_TVs :: Constrain -> Map Int String
+get_TVs c = JST0_types.get_TVs_list (get_types c)
 
-get_tv_inside_list :: [Type] -> (Map Int Type)
-get_tv_inside_list [] = Map.empty
-get_tv_inside_list (x:xs) = Map.unions [get_tv_inside x,get_tv_inside_list xs]
+get_TVs_list :: [Constrain] -> Map Int String
+get_TVs_list cs = Map.unions (Prelude.map JST0_constrain.get_TVs cs)
+
+-- return a set of all variables used in a constraint
+get_TVs_index :: Constrain -> Set Int
+get_TVs_index c = JST0_types.get_TVs_index_list (get_types c)
+
+get_TVs_index_list :: [Constrain] -> Set Int
+get_TVs_index_list cs = Set.unions (Prelude.map JST0_constrain.get_TVs_index cs)
+
+get_first_TV_index :: Constrain -> Int
+get_first_TV_index c | trace 30 ("get_first_TV_index " ++ (show c)) False = undefined
+get_first_TV_index c = let
+  ts = JST0_constrain.get_TVs_index c
+  in Set.findMin ts
 
 -- return all Constraints neccessary to make two lists component-wise subtypes
 makeSubtype_list :: [Type] -> [Type] -> [Constrain]
 makeSubtype_list = Prelude.zipWith (\a b -> (SubType a b)) 
 
+-- return true if the two constraints have no type variables in common
+disjunct :: Constrain -> Constrain -> Bool
+disjunct a b = let
+  ai = JST0_constrain.get_TVs_index a
+  bi = JST0_constrain.get_TVs_index b
+  is = Set.intersection ai bi
+  in (Set.size is) == 0
+
+const :: Constrain -> Bool
+const c = let
+  ts = get_types c
+  in Prelude.foldr (\t prv -> (JST0_types.const t) && prv) True ts
+
+-- return true if one of the high level types are TV
+tv_rel :: Constrain -> Bool
+tv_rel c = let
+  ts = get_types c
+  in Prelude.foldr (\t prv -> (is_TV t) || prv) False ts
+
+tv_rel_get :: Constrain -> Int
+tv_rel_get c = let
+  ts = get_types c
+  in get_first_TVindex ts
+
+tv_rel_get_all :: Constrain -> Set Int
+tv_rel_get_all c = let
+  ts = get_types c
+  in get_all_TVindex ts

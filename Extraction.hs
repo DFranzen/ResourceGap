@@ -15,6 +15,7 @@ module Extraction (
   ex_TobjD,
   ex_TWhile,
   ex_BinOp_JS,
+  ex_StringD_JS
   ) where
 
 import Language.JavaScript.Parser.AST
@@ -101,6 +102,7 @@ ex_binop _ = undefined
 ex_var_name :: Node -> String
 ex_var_name n | trace 30 ("ex_var_name " ++ (show n)) False = undefined
 ex_var_name (JSIdentifier s) = s
+ex_var_name (JSLiteral "this") = "this"
 ex_var_name _ = undefined
 
 ex_var_name_JS :: JSNode -> String
@@ -188,7 +190,7 @@ ex_fieldList (x:xs) = case x of
 
 ex_fieldDecl :: Node -> (String,[JSNode])
 ex_fieldDecl j | trace 30 ("\nex_fieldDecl : " ++ (show j)) False = undefined
-ex_fieldDecl (JSPropertyNameandValue a _dev e) = (ex_string_JS a,e)
+ex_fieldDecl (JSPropertyNameandValue a _dev e) = (ex_String_JS a,e)
 ex_fieldDecl _ = undefined 
 
 ex_fieldDecl_JS :: JSNode -> (String,[JSNode])
@@ -199,8 +201,15 @@ ex_string (JSStringLiteral _lim s) =s
 ex_string (JSIdentifier s) = s
 ex_string _ = undefined 
 
-ex_string_JS :: JSNode -> String
-ex_string_JS = extract_JSNode ex_string
+ex_String_JS :: JSNode -> String
+ex_String_JS = extract_JSNode ex_string
+
+ex_StringD_JS :: JSNode -> String
+ex_StringD_JS = extract_JSNode ex_stringD
+
+ex_stringD :: Node -> String
+ex_stringD (JSStringLiteral _lim s) = s
+ex_stringD _ = undefined
 
 ex_while :: Node -> (JSNode,JSNode)
 ex_while (JSWhile _while _rb bool _lb e) = (bool,e)

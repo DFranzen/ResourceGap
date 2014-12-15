@@ -111,7 +111,8 @@ makeSubtype_list (x:xs) (y:ys) = let
   in concat [c,cs]
 
 ----------------------------------------
--- compute Contraints to make the resources in t1 equal to those in t2
+-- compute Contraints to make the resources in t1 equal to those in t2,
+-- In the Theory that is noted as SubSet^EQ
 ----------------------------------------
 makeEqual_Member :: (TypeAn,FieldType) -> (TypeAn,FieldType) -> [ConstrainAn]
 makeEqual_Member (t1,_f1) (t2,_f2) = makeEqual_An t1 t2
@@ -127,7 +128,7 @@ makeEqual_An :: TypeAn -> TypeAn -> [ConstrainAn]
 makeEqual_An (t1,a1) (t2,a2) = concat [[Gt [a1] [a2],Gt [a2] [a1]],makeEqual_P t1 t2]
 
 makeEqual_P :: TypeP -> TypeP -> [ConstrainAn]
-makeEqual_P t1 t2 | trace 2 ("makeEqual_P " ++ show t1 ++ " <-> " ++  show t2) False = undefined
+makeEqual_P t1 t2 | trace 30 ("makeEqual_P " ++ show t1 ++ " <-> " ++  show t2) False = undefined
 makeEqual_P (JST0P_Object a1 mem1) (JST0P_Object a2 mem2) = let
   (m1,m2) = equalize_alpha (JST0P_Object a1 mem1) (JST0P_Object a2 mem2)
   in makeEqual_Members m1 m2
@@ -139,9 +140,47 @@ makeEqual_P (JST0P_Function o1 t1 n1 tp1 np1) (JST0P_Function o2 t2 n2 tp2 np2) 
         Gt [np1] [np2],Gt [np2] [np1]]
   in concat[cn,co,ct,ctp]
 makeEqual_P a b | (a==b) = []
+                | otherwise = undefined
 
 makeEqual_list :: [TypeP] -> [TypeP] -> [ConstrainAn]
 makeEqual_list as bs = concat (Prelude.zipWith makeEqual_P as bs)
+
+----------------------------------------
+-- Compute set of Constraints to make the two types identical
+----------------------------------------
+makeIdentical_An :: TypeAn -> TypeAn -> [ConstrainAn]
+makeIdentical_An (t1,a1) (t2,a2) = concat [[Gt [a1] [a2],Gt [a2] [a1]],makeIdentical_P t1 t2]
+
+makeIdentical_Member :: (TypeAn,FieldType) -> (TypeAn,FieldType) -> [ConstrainAn]
+makeIdentical_Member (t1,_f1) (t2,_f2) = makeIdentical_An t1 t2
+-- The fieldType has already been verified in the first step of the inference
+
+makeIdentical_Members :: MembersAn -> MembersAn -> [ConstrainAn]
+makeIdentical_Members mem1 mem2 | Map.size mem1 == Map.size mem2 =
+  Map.foldrWithKey
+  (\k t c -> concat[makeIdentical_Member (membersAn_get mem1 k) t,c])
+  []
+  mem2
+                                | otherwise = undefined
+
+makeIdentical_P :: TypeP -> TypeP -> [ConstrainAn]
+makeIdentical_P t1 t2 | trace 30 ("makeIdentical_P " ++ show t1 ++ " <-> " ++  show t2) False = undefined
+makeIdentical_P (JST0P_Object a1 mem1) (JST0P_Object a2 mem2) = let
+  (m1,m2) = equalize_alpha (JST0P_Object a1 mem1) (JST0P_Object a2 mem2)
+  in makeIdentical_Members m1 m2
+makeIdentical_P (JST0P_Function o1 t1 n1 tp1 np1) (JST0P_Function o2 t2 n2 tp2 np2) = let
+  co = makeIdentical_P o1 o2
+  ct = makeIdentical_list t1 t2
+  ctp = makeIdentical_P tp1 tp2
+  cn = [Gt [n1] [n2],Gt [n2] [n1],
+        Gt [np1] [np2],Gt [np2] [np1]]
+  in concat[cn,co,ct,ctp]
+makeIdentical_P a b | (a==b) = []
+                    | otherwise = undefined
+
+makeIdentical_list :: [TypeP] -> [TypeP] -> [ConstrainAn]
+makeIdentical_list as bs = concat (Prelude.zipWith makeIdentical_P as bs)
+
 
 ----------------------------------------
 -- Compute set of Constraints to make the three types match the Split definition
@@ -155,11 +194,11 @@ makeSplit_Member :: (TypeAn,FieldType) -> (TypeAn,FieldType) -> (TypeAn,FieldTyp
 makeSplit_Member (t1,f1) (t2,f2) (t3,f3) | f1 == f2 && f2==f3 = makeSplit_An t1 t2 t3
 
 makeSplit_P :: TypeP -> TypeP -> TypeP -> [ConstrainAn]
---makeSplit_P t1 t2 t3 | trace 2 (
+makeSplit_P t1 t2 t3 | trace 30 ("makeSplitP " ++ show t1 ++ "+" ++ show t2 ++ "=" ++ show t3) False = undefined
 makeSplit_P (JST0P_Object a1 mem1) (JST0P_Object a2 mem2) (JST0P_Object a3 mem3) = let
   (m1,m2,m3) = equalize_alpha3 (JST0P_Object a1 mem1) (JST0P_Object a2 mem2) (JST0P_Object a3 mem3)
   in makeSplit_Members m1 m2 m3
-makeSplit_P t1 t2 t3 | (t1==t2) && (t2==t3) = []
+makeSplit_P t1 t2 t3 = concat [makeIdentical_P t1 t2,makeIdentical_P t2 t3]
 
 makeSplit_An :: TypeAn -> TypeAn -> TypeAn -> [ConstrainAn]
 makeSplit_An (t1,n1) (t2,n2) (t3,n3) = concat [makeSplit_P t1 t2 t3,[Gt [n1,n2] [n3],Gt [n3] [n1,n2]]]

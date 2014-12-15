@@ -9,6 +9,7 @@ import Data.Map as Map
 import Data.Set as Set
 
 import Maps
+import Data.Set as Set
 
 import JST0_constrain
 import JST0_types
@@ -18,21 +19,190 @@ import JST0_solution
 import Debugging
 
 -- API method to close a set of constraints
-close_constraints :: [Constrain] -> [Constrain]
-close_constraints _cs | trace 30 ("close_constraints \n\n") False = undefined
-close_constraints c = let all1 = cset_from_list c
-                      in cset_to_list (close_fix all1 all1)
+close_constraints :: [Constrain] -> CMap
+close_constraints _cs | trace 2 ("close_constraints \n\n") False = undefined
+close_constraints [] = cmap_empty
+close_constraints (x:xs) = let
+  cs = close_constraints xs
+  res | trace 2 ("Constraints total : " ++ (show (cmap_size cs))) True = insert_and_close cs x
+  in res
+
+-- insert a new constrain into the CMAP and (if neccessary insert all constraints in the closure)
+insert_and_close :: CMap -> Constrain -> CMap
+insert_and_close cmap c | trace 30 ("Inserting " ++ show c ++ " into " ++ show cmap) False = undefined
+insert_and_close cmap c = let
+  -- insert new constraint
+  (cmap1,b2) = cmap_check_and_insert cmap c
+  b | trace 30 ("Check came back " ++ show b2) True = b2
+  in case b of
+    -- not a new constraint
+    True -> cmap
+    -- New constraint -> close it with all the relevant others
+    False -> let
+      -- close on its own
+      cmap2 | is_closeCongFunc c = cc_closeCongFunc cmap1 c
+            | otherwise = cmap1
+      -- get all the relevant TVs
+      ind = Set.insert (-1) (JST0_constrain.get_TVs_index c)
+      -- get all the relevant constraints
+      cs = Set.map (\i -> (cmap_geti cmap2 i)) ind
+      in close_WithSetCSet cmap2 c cs
+
+insert_and_close_set_list :: CMap -> Set CSet -> CMap
+insert_and_close_set_list cm s = Set.fold (\cs prv -> insert_and_close_set prv cs) cm s
+
+insert_and_close_set :: CMap -> CSet -> CMap
+insert_and_close_set cm cs = Map.fold (\c prv -> insert_and_close prv c) cm cs
+
+insert_and_close_list :: CMap -> [Constrain] -> CMap
+insert_and_close_list cmap [] = cmap
+insert_and_close_list cmap (x:xs) = let
+  i1 = insert_and_close cmap x
+  in insert_and_close_list i1 xs
+
+-- close one given constraint with a Set of Constraints and insert the resulting new constraints into the given CMap
+--close_WithConstraintSet :: CMap -> Constrain -> Set Constrain -> CMap
+--close_WithConstraintSet
+
+-- close one given constraint with a Constraint and insert the resulting new Constrains into the given CMap
+close_WithConstraint :: CMap -> Constrain -> Constrain -> CMap
+close_WithConstraint cm c cp = let
+  cm1 = close_apply cm  is_closeEmpty       cc_closeEmpty       c cp
+  cm2 = close_apply cm1 is_closeTrans       cc_closeTrans       c cp
+  cm3 = close_apply cm2 is_closeTransMem    cc_closeTransMem    c cp
+  cm4 = close_apply cm3 is_closeBalance     cc_closeBalance     c cp
+  cm5 = close_apply cm4 is_closeBalanceMem  cc_closeBalanceMem  c cp
+  cm6 = close_apply cm5 is_closeBalanceMems cc_closeBalanceMems c cp
+  cm7 = close_apply cm6 is_closeCong        cc_closeCong        c cp
+  in cm7
+     
+close_apply:: CMap -> (Constrain -> Constrain -> Bool) -> (CMap -> Constrain -> Constrain -> CMap) -> Constrain -> Constrain -> CMap
+close_apply cm is cc c1 c2 = let
+  -- one way
+  cm1 = if (is c1 c2) then cc cm  c1 c2 else cm
+  -- reverse way
+  cm2 = if (is c2 c1) then cc cm1 c2 c1 else cm1
+  in cm2
+
+-- close one given constraint with a set of constraints
+close_WithCSet :: CMap -> Constrain -> CSet -> CMap
+close_WithCSet cm c cs = Map.fold (\cp prv -> close_WithConstraint prv c cp) cm cs
+
+close_WithSetCSet :: CMap -> Constrain -> Set CSet -> CMap
+close_WithSetCSet cm c css = Set.fold (\cp prv -> close_WithCSet prv c cp) cm css
+
+is_closeEmpty :: Constrain -> Constrain -> Bool
+is_closeEmpty (SubType t1 t1p) (Empty t) = (t1 == t)
+is_closeEmpty _ _ = False
+
+is_closeTrans :: Constrain -> Constrain -> Bool
+is_closeTrans (SubType t1 t1p) (SubType t2 t2p) = (t1p == t2p)
+is_closeTrans (Cast t1 t1p) (Cast t2 t2p) = (t1p == t2)
+is_closeTrans _ _ = False
+
+is_closeTransMem :: Constrain -> Constrain -> Bool
+is_closeTransMem (MemberExtend t1 m1 t1p) (SubType t2 to) =
+  (t1p == t2) && (t2 /= JST0_None)
+is_closeTransMem (Extend t1 t1p) (SubType t2 to) =
+  (t1p == t2) && (t2 /= JST0_None)
+is_closeTransMem _ _ = False
+
+is_closeBalance :: Constrain -> Constrain -> Bool
+is_closeBalance (SubType t1 t1p) (SubType t2 t2p) =
+  (t1==t2) && (t1/=JST0_None) &&
+  ((is_Function t2p) || (is_Simple t2p))
+is_closeBalance _ _= False
+
+is_closeBalanceMem :: Constrain -> Constrain -> Bool
+is_closeBalanceMem (MemberExtend t1 m1 t1p) (SubType t2 to) =
+  (t1 == t2) && (t2 /= JST0_None)
+is_closeBalanceMem _ _ = False
+
+is_closeBalanceMems :: Constrain -> Constrain -> Bool
+is_closeBalanceMems (Extend t1 t1p) (SubType t2 t0) =
+  (t1 == t2) && (t2 /= JST0_None)
+is_closeBalanceMems _ _ = False
+
+
+is_closeCong :: Constrain -> Constrain -> Bool
+is_closeCong (SubType t1 t1p) (SubType t2 t2p) =
+  (t1 == t2) && (t1/=JST0_None) &&
+  (is_Object t1p) &&
+  (is_Object t2p)
+is_closeCong _ _ = False
+
+is_closeCongFunc :: Constrain ->  Bool
+is_closeCongFunc (SubType t1 t1p) = (is_Function t1) && (is_Function t1p)
+is_closeCongFunc _ = False
+
+cc_closeEmpty :: CMap -> Constrain -> Constrain -> CMap
+cc_closeEmpty cm (SubType t1 t1p) (Empty t) = insert_and_close cm (Empty t1p)
+
+cc_closeTrans :: CMap -> Constrain -> Constrain -> CMap
+cc_closeTrans cm (SubType t1 _t1p) (SubType _t2 t2p) =
+  insert_and_close cm (SubType t1 t2p)
+cc_closeTrans cm (Cast t1 _t1p) (Cast _t2 t2p) =
+  insert_and_close cm (Cast t1 t2p)
+cc_closeTrans _cm _c1 _c2 = undefined
+
+cc_closeTransMem :: CMap -> Constrain -> Constrain -> CMap
+cc_closeTransMem cm (MemberExtend t1 _m _t1p) (SubType _t2 to) =
+  let new_l = members_closeTransMem t1 to (object_get_fieldnames to)
+  in insert_and_close_list cm new_l
+cc_closeTransMem cm (Extend t1 _t1p) (SubType _t2 to) =
+  let new_l = members_closeTransMem t1 to (object_get_fieldnames to)
+  in insert_and_close_list cm new_l
+cc_closeTransMem _cm _c1 _c2 = undefined
+
+cc_closeBalance :: CMap -> Constrain -> Constrain -> CMap
+cc_closeBalance cm (SubType _t1 t1p) (SubType _t2 t2p) =
+  let new = (SubType t1p t2p)
+  in insert_and_close cm new
+cc_closeBalance _cm _c1 _c2 = undefined
+
+cc_closeBalanceMem :: CMap -> Constrain -> Constrain -> CMap
+cc_closeBalanceMem cm (MemberExtend _t1 m1 t1p) (SubType _t2 to) =
+  let new_l = members_closeBalanceMem t1p to m1 (object_get_fieldnames to)
+  in insert_and_close_list cm new_l
+cc_closeBalanceMem _cm _c1 _c2 = undefined
+
+cc_closeBalanceMems :: CMap -> Constrain -> Constrain -> CMap
+cc_closeBalanceMems cm (Extend _t1 t1p) (SubType _t2 to) =
+  let new_l = members_closeBalanceMems t1p to (object_get_fieldnames to)
+  in insert_and_close_list cm new_l
+cc_closeBalanceMems _cm _c1 _c2 = undefined
+
+cc_closeCong :: CMap -> Constrain -> Constrain -> CMap
+cc_closeCong cm (SubType _t1 t1p) (SubType _t2 t2p) = let
+  -- TODO: unrolling?
+  new_l = members_closeCong t1p t2p (concat [object_get_fieldnames t1p,object_get_fieldnames t2p])
+  in insert_and_close_list cm new_l
+cc_closeCong _cm _c1 _c2 = undefined
+
+cc_closeCongFunc :: CMap -> Constrain -> CMap
+cc_closeCongFunc cm (SubType (JST0_Function o1 t1 t1p) (JST0_Function o2 t2 t2p)) =
+  let new_l1 = close_list t1 t2
+      new_l2 = close_list t2 t1
+      cm1 = insert_and_close_list cm  new_l1
+      cm2 = insert_and_close_list cm1 new_l2
+      cm3 = insert_and_close cm2 (SubType t1p t2p)
+      cm4 = insert_and_close cm3 (SubType t2p t1p)
+      cm5 = insert_and_close cm4 (SubType o2 o1)
+      cm6 = insert_and_close cm5 (SubType o1 o2)
+  in cm6
+cc_closeCongFunc _cm _c1 = undefined
 
 -- close_fix S1 S2 S': Apply all the closure rules to pairs (c1,c2)\in S1xS2 as long as there is progress.
 -- return all newly created constrains
 close_fix :: CSet -> CSet -> CSet
-close_fix s1 s2 = let _ = putStr "step starts"
-                      new1 = closes s1 s2
-                      _ = putStr "one step completed"
-                      (all1,b) = cset_union_bool new1 s2
-                  in if b
-                     then Map.union (close_fix new1 all1) new1
-                     else all1
+close_fix s2 s1p = let  s2p = closes s2 s1p
+                        (s3,b) = cset_union_int s2p s2
+                   in if b>0
+                      then let sk |trace 25 ("New Constraints: " ++ show b ++ ", Total: " ++ (show (Map.size s3))) True = close_fix s3 s2p
+                           in sk
+                      else s3
+--in Map.union (close_fix new1 all1) new1
+--                     else all1
 
 -- close S1 S2 S': apply the closure rules to all pairs (s1,s2)\in S1xS2
 -- returns all newly infered constraints
@@ -66,13 +236,16 @@ close_listp (x:xs) (y:ys) = (SubType x y):(close_list xs ys)
 -- close_with c S S': apply the closure rule to all pairs (c,s)\in {c}xS
 -- return all newly infered constrains S'
 close_with:: Constrain -> CSet -> CSet
-close_with c s = if (Map.size s == 0) 
-                 then Map.empty
-                 else let (_,elem1) = Map.findMin s
-                      in Map.union (close_with c (Map.deleteMin s)) (close c elem1)
+close_with c s = Map.fold (\a b -> Map.union (close c a) b) Map.empty s
+
+  -- if (Map.size s == 0) 
+  --                then Map.empty
+  --                else let (_,elem1) = Map.findMin s
+  --                     in Map.union (close_with c (Map.deleteMin s)) (close c elem1)
 
 -- close c c' S': apply all closure rules to the pair c c' to obtain all indirect constraints in the set S'
 close :: Constrain -> Constrain -> CSet
+close a b | disjunct a b = Map.empty
 close (SubType t1 t1p) (Empty t) | t1 == t = let
   new = Empty t1p
   c = Map.insert (show new) new Map.empty
@@ -140,6 +313,7 @@ close (Extend t1 t1p) (SubType t2 to) | trace 30 ("close " ++ (show (Extend t1 t
     c1 = if ((t1p==t2) && (t2/=JST0_None))
          then cset_from_list (members_closeTransMem t1 to (object_get_fieldnames to))
          else Map.empty
+    -- closeBalanceMems
     c2 = if ((t1==t2) && (t2/=JST0_None))
          then cset_insert_multi c1 (members_closeBalanceMems t1p to (object_get_fieldnames to))
          else c1
@@ -239,10 +413,10 @@ tvmap_close tv_map = tvmap_close_list tv_map (Map.keys tv_map)
 ----------------------------------------
 
 --extract the HL types of all TVs invoved
-extract_HL_types :: [Constrain] -> (HL_Map)
+extract_HL_types :: CMap -> (HL_Map)
 extract_HL_types cs = let
-  cs_map = cmap_from_list cs
-  tv_map = tvmap_close (tvmap_from_list cs)
+  cs_map = cs
+  tv_map = tvmap_close (tvmap_from_CMap cs)
   tvs = Map.keysSet cs_map
   in extract_HL_type_set tvs tv_map cs_map
 
@@ -252,7 +426,8 @@ extract_HL_type_set s _tv_map _cs_map | Set.null s = Map.empty
 extract_HL_type_set s  tv_map cs_map = let
   (tv,sn) = Set.deleteFindMax s      -- get next tv
   css = cmap_geti cs_map tv          -- get all cs for this tv
-  hl_type = extract_HL_type_from css -- extract HL type from these cs
+  css_list = cset_to_list css        -- This set is read one by one now => make it easier by transforming to list.
+  hl_type = extract_HL_type_from css_list -- extract HL type from these cs
   in case hl_type of
     -- if we can't figure out that one, figure out the rest
     HL_None -> extract_HL_type_set sn tv_map cs_map
@@ -276,10 +451,9 @@ extract_HL_type_from (c:cs) = case c of
   (Only_type t1 t2) -> extract_HL_type_pair t1 t2 cs
   (Empty _t ) -> HL_Object
 
-
 -- two types are related, what does that mean for the HL type of each of them?
 extract_HL_type_pair :: Type -> Type -> [Constrain] -> HL_Type
-extract_HL_type_pair a b cs | trace 30 ("extract_HL_type_pair " ++ show a ++ "," ++ show b) False = undefined
+extract_HL_type_pair a b cs | trace 2 ("extract_HL_type_pair " ++ show a ++ "," ++ show b) False = undefined
 extract_HL_type_pair (JST0_TV _a1 _ann1) (JST0_TV _a2 _ann2) cs = extract_HL_type_from cs
 extract_HL_type_pair (JST0_TV _a2 _ann2) t cs  = add_HL_types (get_HL_type t) (extract_HL_type_from cs)
 extract_HL_type_pair t (JST0_TV _a2 _ann2) cs = add_HL_types (get_HL_type t) (extract_HL_type_from cs)
@@ -321,12 +495,11 @@ well_formed_one (IsObject t) m = hl_map_consistent m t HL_Object
 -- Arguments:
 --  - closed list of constraints
 -- Returns: minimal Solution for all TVs
-extract_solution :: [Constrain] -> Solution
-extract_solution cs = let hl = extract_HL_types cs
-                          cmap = cmap_from_list cs
-                          sol = extract_solution_all (Map.keys cmap) (hl,cmap)
-                          -- _correct | check_solution cs sol = True
-                      in sol
+extract_solution :: CMap -> Solution
+extract_solution cmap = let hl = extract_HL_types cmap
+                            sol = extract_solution_all (Map.keys cmap) (hl,cmap)
+                            -- _correct | check_solution cs sol = True
+                        in sol
 
 
 --make a type TV-less
@@ -404,8 +577,8 @@ extract_type_members s m mem = Map.map (extract_type_member s m) mem
 --  - Currently infered TV index
 --  - All constraints concerning that TV
 -- Returns: Type of this TV
-extract_type_function :: (Set Int) -> (HL_Map,CMap) -> Int -> [Constrain] -> Type
-extract_type_function s mp i cs = Prelude.foldr (\this rest -> extract_type_function_one s mp i this rest) (JST0_Function JST0_None [] JST0_None) cs
+extract_type_function :: (Set Int) -> (HL_Map,CMap) -> Int -> CSet -> Type
+extract_type_function s mp i cs = Map.foldr (\this rest -> extract_type_function_one s mp i this rest) (JST0_Function JST0_None [] JST0_None) cs
 --extract_type_function s m i [] = JST0_Function JST0_None JST0_None JST0_None
 --extract_type_function s m i [c] = extract_type_function_one s m i c
 --extract_type_function s m i (c:cs) = let rest = extract_type_function s m i cs
@@ -433,8 +606,8 @@ extract_type_function_one _ _ _ (SubType _ _) tc = tc
                                                                        
 -- extract_type_function_one s m i _ = JST0_None -- constraints other than subtype should not occure for functions
 
-extract_type_object :: (Set Int) -> (HL_Map,CMap) -> Int -> [Constrain] -> Type
-extract_type_object s mp i cs = Prelude.foldr (\this rest -> extract_type_object_one s mp i this rest) (object_empty (Beta i)) cs
+extract_type_object :: (Set Int) -> (HL_Map,CMap) -> Int -> CSet -> Type
+extract_type_object s mp i cs = Map.foldr (\this rest -> extract_type_object_one s mp i this rest) (object_empty (Beta i)) cs
 --extract_type_object _ _ _ [] = JST0_Object (Alpha 0) Map.empty
 --extract_type_object s m i [c] = extract_type_object_one s m i c
 --extract_type_object s m i (c:cs) = let rest = extract_type_object s m i cs

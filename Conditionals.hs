@@ -60,6 +60,9 @@ is_TobjD_JS = is_objDecl_JS
 is_TWhile_JS :: JSNode -> Bool
 is_TWhile_JS = check_JSNode is_while
 
+is_StringD_JS :: JSNode -> Bool
+is_StringD_JS = check_JSNode is_string
+
 is_BoolResOp_JS :: JSNode -> Bool
 is_BoolResOp_JS = check_JSNode is_boolresop
 
@@ -186,6 +189,7 @@ is_if_JS = check_JSNode is_if
 
 is_var_acc :: Node -> Bool
 is_var_acc (JSIdentifier _x) = True
+is_var_acc (JSLiteral "this") = True
 is_var_acc _ = False
 
 is_var_acc_JS :: JSNode -> Bool
@@ -217,6 +221,10 @@ is_semicolon_list _other = False
 is_int :: Node -> Bool
 is_int (JSDecimal _i) = True
 is_int _other = False
+
+is_string :: Node -> Bool
+is_string (JSStringLiteral _delim _s ) = True
+is_string _other = False
 
 is_semicolon_JS :: JSNode -> Bool
 is_semicolon_JS = check_JSNode is_semicolon
